@@ -172,7 +172,7 @@ nonisolated enum ProjectFileIndex {
     /// Always skipped, even without a .gitignore: version-control metadata,
     /// dependencies and build output.
     static let skippedFolders: Set<String> = [
-        ".git", ".hg", ".svn", "node_modules", ".build", ".swiftpm", "DerivedData", "Pods",
+        ".git", ".hg", ".svn", "node_modules", ".build", ".swiftpm", "DerivedData", "Pods", ".bundle",
     ]
 
     static func scan(root: URL) -> [QuickOpenItem] {

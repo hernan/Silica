@@ -1,17 +1,22 @@
 import Foundation
 
-/// Languages the editor can highlight, detected from the file name.
+/// Languages the editor can highlight, detected from the file name or shebang.
 nonisolated enum SyntaxLanguage: String, Sendable, CaseIterable {
     case swift, javascript, typescript, json, python, ruby, go, rust
     case c, cpp, objectiveC, java, kotlin, csharp, php
     case shell, yaml, toml, html, xml, css, markdown, sql, dockerfile, makefile, diff
 
-    init?(url: URL) {
+    init?(url: URL, text: String? = nil) {
         let name = url.lastPathComponent.lowercased()
         switch name {
         case "dockerfile", "containerfile": self = .dockerfile; return
         case "makefile", "gnumakefile": self = .makefile; return
-        case "gemfile", "rakefile", "podfile", "fastfile", "brewfile": self = .ruby; return
+        case "gemfile", "rakefile", "podfile", "fastfile", "brewfile",
+             "guardfile", "capfile", "vagrantfile", "berksfile", "thorfile",
+             "dangerfile", "puppetfile", "appfile", "deliverfile", "matchfile",
+             "scanfile", "snapfile", "gymfile", "config.ru", ".irbrc", ".pryrc",
+             ".simplecov":
+            self = .ruby; return
         case ".zshrc", ".bashrc", ".bash_profile", ".zprofile", ".profile", ".envrc": self = .shell; return
         case ".gitignore", ".gitattributes", ".editorconfig", ".npmrc", ".env": self = .toml; return
         default: break
@@ -24,7 +29,7 @@ nonisolated enum SyntaxLanguage: String, Sendable, CaseIterable {
         case "ts", "mts", "cts", "tsx": self = .typescript
         case "json", "jsonc", "json5", "xcproj", "babelrc", "eslintrc", "webmanifest": self = .json
         case "py", "pyi", "pyw": self = .python
-        case "rb", "rake", "gemspec", "podspec": self = .ruby
+        case "rb", "rake", "gemspec", "podspec", "ru", "thor", "rbx", "jbuilder", "rabl", "ruby": self = .ruby
         case "go": self = .go
         case "rs": self = .rust
         case "c", "h": self = .c
@@ -45,17 +50,54 @@ nonisolated enum SyntaxLanguage: String, Sendable, CaseIterable {
         case "sql": self = .sql
         case "mk": self = .makefile
         case "diff", "patch", "rej": self = .diff
+        default:
+            if let text, let shebang = Self.language(fromShebangIn: text) {
+                self = shebang
+            } else {
+                return nil
+            }
+        }
+    }
+
+    private static func language(fromShebangIn text: String) -> SyntaxLanguage? {
+        guard text.hasPrefix("#!") else { return nil }
+        let firstLine = text.prefix { !$0.isNewline }.lowercased()
+        let args = firstLine.dropFirst(2).split(whereSeparator: { $0 == " " || $0 == "\t" })
+        guard let firstArg = args.first else { return nil }
+
+        // Resolve the interpreter name from `#!/path/to/bin` or `#!/usr/bin/env [-S] [VAR=val] bin`.
+        var command = firstArg.split(separator: "/").last ?? ""
+        if command == "env" {
+            let next = args.dropFirst().first { !$0.hasPrefix("-") && !$0.contains("=") }
+            command = next?.split(separator: "/").last ?? ""
+        }
+        guard !command.isEmpty else { return nil }
+
+        if isVersionedCommand("ruby", token: command) || command == "jruby" { return .ruby }
+        if isVersionedCommand("python", token: command) { return .python }
+        switch command {
+        case "sh", "bash", "zsh", "fish": return .shell
+        case "node": return .javascript
         default: return nil
         }
+    }
+
+    private static func isVersionedCommand(_ base: String, token: Substring) -> Bool {
+        if token == base { return true }
+        guard token.hasPrefix(base) else { return false }
+        let suffix = token.dropFirst(base.count)
+        return suffix.first?.isNumber == true && suffix.allSatisfy { $0.isNumber || $0 == "." }
     }
 
     /// The language named on a Markdown code fence, e.g. ```swift or ```js.
     init?(fenceName: String) {
         let name = fenceName.lowercased().trimmingCharacters(in: .whitespaces)
         let aliases: [String: String] = [
-            "javascript": "js", "typescript": "ts", "python": "py", "ruby": "rb", "rust": "rs",
-            "objc": "m", "objective-c": "m", "objectivec": "m", "c++": "cpp", "csharp": "cs",
-            "c#": "cs", "kotlin": "kt", "shell": "sh", "console": "sh", "yaml": "yml",
+            "javascript": "js", "typescript": "ts", "python": "py",
+            "ruby": "rb", "irb": "rb", "pry": "rb", "jruby": "rb",
+            "rust": "rs", "objc": "m", "objective-c": "m", "objectivec": "m",
+            "c++": "cpp", "csharp": "cs", "c#": "cs", "kotlin": "kt",
+            "shell": "sh", "console": "sh", "yaml": "yml",
             "markdown": "md", "golang": "go",
         ]
         switch name {

@@ -44,6 +44,7 @@ final class EditorBuffer: Identifiable {
 
     var cursor = CursorStatus()
     var indentation = EditorTextView.Indentation(usesTabs: false, width: 4)
+    private(set) var language: SyntaxLanguage?
 
     /// Markdown, CSV and HTML files can switch between their source and a rendered preview;
     /// `nil` for every other kind of file.
@@ -279,7 +280,9 @@ final class EditorBuffer: Identifiable {
         }
 
         self.encoding = encoding
-        let controller = TextController(text: text, language: SyntaxLanguage(url: url))
+        let resolvedLanguage = SyntaxLanguage(url: url, text: text)
+        self.language = resolvedLanguage
+        let controller = TextController(text: text, language: resolvedLanguage)
         content = .text(controller)
         controller.buffer = self
         controller.updateStatus()
@@ -295,8 +298,6 @@ final class EditorBuffer: Identifiable {
     }
 
     // MARK: Status
-
-    var language: SyntaxLanguage? { SyntaxLanguage(url: url) }
 
     /// e.g. "UTF-8", for the status bar.
     var encodingName: String {
@@ -338,7 +339,13 @@ final class EditorBuffer: Identifiable {
             self.preview = preview
             preview.show(controller.textView.string, line: controller.topVisibleLine())
         }
-        textController?.setLanguage(SyntaxLanguage(url: newURL))
+        updateLanguage(text: textController?.textView.string)
+    }
+
+    private func updateLanguage(text: String?) {
+        let resolved = SyntaxLanguage(url: url, text: text)
+        language = resolved
+        textController?.setLanguage(resolved)
     }
 
     /// Writes the text to another file (Save As), leaving this buffer as it is.
@@ -405,6 +412,7 @@ final class EditorBuffer: Identifiable {
         // Through a symlink to its target: an atomic write to the link itself would
         // swap it for a regular file and leave the real file unchanged.
         try data.write(to: url.resolvingSymlinksInPath(), options: .atomic)
+        updateLanguage(text: controller.textView.string)
         diskSnapshot = Self.attributes(of: url).map { DiskSnapshot(attributes: $0, digest: Self.digest(of: data)) }
         isDirty = false
         isMissingOnDisk = false
@@ -468,6 +476,7 @@ final class EditorBuffer: Identifiable {
               let (text, newEncoding) = Self.decode(data) else { return }
         encoding = newEncoding
         controller.replaceText(with: text)
+        updateLanguage(text: text)
         diskSnapshot = Self.attributes(of: url).map { DiskSnapshot(attributes: $0, digest: Self.digest(of: data)) }
         isDirty = false
         isMissingOnDisk = false

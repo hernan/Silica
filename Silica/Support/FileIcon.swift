@@ -28,41 +28,51 @@ struct FileIcon: View {
         if isDirectory {
             return ("folder", C.folder)
         }
-        let code = "chevron.left.forwardslash.chevron.right"
-        let name = url.lastPathComponent.lowercased()
-        switch name {
-        case "package.swift": return ("swift", C.swift)
-        case "dockerfile": return ("shippingbox", C.blue)
-        case "makefile": return ("hammer", C.brown)
+        switch url.lastPathComponent.lowercased() {
         case "license", "license.md", "license.txt": return ("checkmark.seal", C.yellow)
         case ".gitignore", ".gitattributes": return ("arrow.triangle.branch", C.red)
         default: break
         }
         switch url.pathExtension.lowercased() {
-        case "swift": return ("swift", C.swift)
-        case "js", "mjs", "cjs", "jsx": return ("curlybraces", C.yellow)
-        case "ts", "tsx": return ("curlybraces", C.blue)
-        case "json", "jsonc": return ("curlybraces.square", C.amber)
-        case "md", "markdown", "mdx": return ("text.alignleft", C.indigo)
-        case "html", "htm", "xml", "svg", "vue": return (code, C.pink)
-        case "css", "scss", "sass", "less": return ("paintbrush", C.purple)
-        case "py": return (code, C.teal)
-        case "go": return (code, C.cyan)
-        case "rb", "java": return (code, C.red)
-        case "rs": return (code, C.brown)
-        case "kt", "cs": return (code, C.purple)
-        case "php": return (code, C.indigo)
-        case "c", "h", "m", "mm", "cpp", "hpp": return (code, C.blue)
-        case "sh", "zsh", "bash", "fish": return ("terminal", C.green)
-        case "yml", "yaml", "toml", "ini", "plist", "xcconfig", "env": return ("gearshape", C.steel)
+        case "plist": return ("gearshape", C.steel)
         case "png", "jpg", "jpeg", "gif", "heic", "webp", "ico", "icns": return ("photo", C.mint)
         case "pdf": return ("doc.richtext", C.red)
         case "mp4", "mov", "m4v", "avi", "mkv", "webm", "mpg", "mpeg", "3gp": return ("film", C.purple)
         case "zip", "gz", "tar", "rar", "7z": return ("archivebox", C.brown)
-        case "diff", "patch", "rej": return ("plusminus", C.green)
         case "lock", "resolved": return ("lock", C.neutral)
         case "txt", "log": return ("doc.plaintext", C.neutral)
-        default: return ("doc", C.neutral)
+        default: break
+        }
+        if let language = SyntaxLanguage(url: url) {
+            return style(for: language)
+        }
+        return ("doc", C.neutral)
+    }
+
+    private static func style(for language: SyntaxLanguage) -> (String, Color) {
+        typealias C = FileIconPalette
+        let code = "chevron.left.forwardslash.chevron.right"
+        switch language {
+        case .swift: return ("swift", C.swift)
+        case .javascript: return ("curlybraces", C.yellow)
+        case .typescript: return ("curlybraces", C.blue)
+        case .json: return ("curlybraces.square", C.amber)
+        case .markdown: return ("text.alignleft", C.indigo)
+        case .html, .xml: return (code, C.pink)
+        case .css: return ("paintbrush", C.purple)
+        case .python: return (code, C.teal)
+        case .go: return (code, C.cyan)
+        case .ruby, .java: return (code, C.red)
+        case .rust: return (code, C.brown)
+        case .kotlin, .csharp: return (code, C.purple)
+        case .php: return (code, C.indigo)
+        case .c, .cpp, .objectiveC: return (code, C.blue)
+        case .shell: return ("terminal", C.green)
+        case .yaml, .toml: return ("gearshape", C.steel)
+        case .dockerfile: return ("shippingbox", C.blue)
+        case .makefile: return ("hammer", C.brown)
+        case .diff: return ("plusminus", C.green)
+        case .sql: return ("doc", C.neutral)
         }
     }
 }
