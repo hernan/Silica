@@ -74,6 +74,7 @@ private nonisolated extension RubyTokenizer {
         static let backtick = unichar(UInt8(ascii: "`"))
         static let lowerA = unichar(UInt8(ascii: "a"))
         static let lowerB = unichar(UInt8(ascii: "b"))
+        static let lowerC = unichar(UInt8(ascii: "c"))
         static let lowerD = unichar(UInt8(ascii: "d"))
         static let lowerE = unichar(UInt8(ascii: "e"))
         static let lowerF = unichar(UInt8(ascii: "f"))
@@ -108,6 +109,7 @@ private nonisolated extension RubyTokenizer {
     enum DelimitedOutcome {
         case interpolation(DelimitedLiteral)
         case shorthand(DelimitedLiteral)
+        case pendingHeredocs(DelimitedLiteral)
         case closed
         case eof
     }
@@ -163,15 +165,11 @@ private nonisolated extension RubyTokenizer {
         private mutating func scanCodeStep() {
             let c = chars[index]
 
-            // Newlines drain any heredocs opened earlier on this line.
+            // Newlines end expression context for `/` / `?` / `%` and drain any heredocs opened on this line.
             if isNewline(c) {
                 consumeNewline()
-                if !pendingHeredocs.isEmpty {
-                    for heredoc in pendingHeredocs.reversed() {
-                        contextStack.append(.heredoc(heredoc))
-                    }
-                    pendingHeredocs.removeAll(keepingCapacity: true)
-                }
+                drainPendingHeredocs()
+                canStartRegex = true
                 return
             }
 
@@ -336,6 +334,9 @@ private nonisolated extension RubyTokenizer {
                 canStartRegex = true
             case .shorthand(let updated):
                 contextStack[contextStack.count - 1] = .delimited(updated)
+            case .pendingHeredocs(let updated):
+                contextStack[contextStack.count - 1] = .delimited(updated)
+                drainPendingHeredocs()
             case .closed:
                 contextStack.removeLast()
                 canStartRegex = false
@@ -349,6 +350,12 @@ private nonisolated extension RubyTokenizer {
 
             while index < length {
                 let c = chars[index]
+
+                if !pendingHeredocs.isEmpty && isNewline(c) {
+                    consumeNewline()
+                    emit(literal.kind, spanStart..<index)
+                    return .pendingHeredocs(literal)
+                }
 
                 if c == ASCII.backslash {
                     index += 1
@@ -419,8 +426,10 @@ private nonisolated extension RubyTokenizer {
             guard index + 1 < length else { return false }
             let c1 = chars[index + 1]
 
+            let canStartSpecPercent = canStartRegex || (index > 0 && isWhitespaceOrNewline(chars[index - 1]))
+
             // `%q(...)`, `%Q[...]`, `%w{...}`, `%W<...>`, `%i|...|`, `%I/.../`, `%r{...}`, `%x(...)`, `%s(...)`
-            if let spec = percentSpecifier(c1), index + 2 < length {
+            if canStartSpecPercent, let spec = percentSpecifier(c1), index + 2 < length {
                 let delim = chars[index + 2]
                 if isPercentDelimiter(delim) {
                     let (open, close) = pairedDelimiter(delim)
@@ -479,7 +488,8 @@ private nonisolated extension RubyTokenizer {
                 let c = chars[pos]
                 if isNewline(c) { return false }
                 if c == ASCII.backslash {
-                    pos += 2
+                    pos += 1
+                    if pos < length && !isNewline(chars[pos]) { pos += 1 }
                     continue
                 }
                 if inClass {
@@ -487,11 +497,45 @@ private nonisolated extension RubyTokenizer {
                 } else if c == ASCII.lBracket {
                     inClass = true
                 } else if c == ASCII.slash {
-                    return true
+                    return isValidCommandRegexFollower(afterSlashAt: pos)
                 }
                 pos += 1
             }
             return false
+        }
+
+        private func isValidCommandRegexFollower(afterSlashAt slashPos: Int) -> Bool {
+            var after = slashPos + 1
+            while after < length && isRegexFlag(chars[after]) { after += 1 }
+            // Reject attached word tails like `/foo/bar` or `/2 + height/if_cond`.
+            if after > slashPos + 1 && after < length && isIdentContinue(chars[after]) {
+                return false
+            }
+            while after < length && (chars[after] == ASCII.space || chars[after] == ASCII.tab) {
+                after += 1
+            }
+            guard after < length else { return true }
+            let f = chars[after]
+            if isNewline(f) || f == ASCII.hash { return true }
+            switch f {
+            case ASCII.comma, ASCII.rParen, ASCII.rBracket, ASCII.rBrace, ASCII.semicolon,
+                 ASCII.dot, ASCII.question, ASCII.colon, ASCII.plus, ASCII.minus, ASCII.star,
+                 ASCII.slash, ASCII.percent, ASCII.equals, ASCII.bang, ASCII.tilde,
+                 ASCII.lessThan, ASCII.greaterThan, ASCII.ampersand, ASCII.pipe, ASCII.caret,
+                 ASCII.lBracket, ASCII.lParen:
+                return true
+            default:
+                if isIdentStart(f) {
+                    var wordEnd = after + 1
+                    while wordEnd < length && isIdentContinue(chars[wordEnd]) { wordEnd += 1 }
+                    if wordEnd < length && (chars[wordEnd] == ASCII.question || chars[wordEnd] == ASCII.bang) {
+                        wordEnd += 1
+                    }
+                    let word = String(decoding: chars[after..<wordEnd], as: UTF16.self)
+                    return Self.postRegexKeywords.contains(word)
+                }
+                return false
+            }
         }
 
         // MARK: Heredocs
@@ -554,6 +598,7 @@ private nonisolated extension RubyTokenizer {
                 if isNewline(c) {
                     consumeNewline()
                     emit(.string, spanStart..<index)
+                    drainPendingHeredocs()
                     return
                 }
                 if heredoc.interpolated && c == ASCII.backslash {
@@ -679,9 +724,9 @@ private nonisolated extension RubyTokenizer {
                 return
             }
 
-            // Avoid turning `a?b:c` ternary into a symbol.
-            let precededByIdent = index > 0 && isIdentContinue(chars[index - 1])
-            guard !precededByIdent, index + 1 < length else {
+            // Avoid turning ternary `a?b:c`, `a ? 'x':'y'`, or `a ? f():g()` into symbols.
+            let canBeSymbol = canStartRegex || (index > 0 && isWhitespaceOrNewline(chars[index - 1]))
+            guard canBeSymbol, index + 1 < length else {
                 index += 1
                 canStartRegex = true
                 return
@@ -737,26 +782,75 @@ private nonisolated extension RubyTokenizer {
             let start = index
             index += 1
             if next == ASCII.backslash {
-                index += 1
-                if index < length {
-                    // Handle `\C-x`, `\M-x`, `\u{...}` or single escaped char.
-                    let esc = chars[index]
-                    index += 1
-                    if (esc == ASCII.upperC || esc == ASCII.upperM) && index + 1 < length && chars[index] == ASCII.minus {
-                        index += 2
-                    } else if esc == ASCII.lowerU && index < length && chars[index] == ASCII.lBrace {
-                        while index < length && chars[index] != ASCII.rBrace && !isNewline(chars[index]) { index += 1 }
-                        if index < length && chars[index] == ASCII.rBrace { index += 1 }
-                    }
-                }
+                consumeCharEscape()
             } else {
-                index += 1
-                if index < length && UTF16.isLeadSurrogate(next) && UTF16.isTrailSurrogate(chars[index]) {
-                    index += 1
-                }
+                consumeSingleCharOrSurrogatePair()
             }
             emit(.string, start..<index)
             canStartRegex = false
+        }
+
+        private mutating func consumeCharEscape() {
+            // Consume chained control/meta prefixes (`\C-`, `\M-`, `\c`), then the target char or numeric escape.
+            while index < length && chars[index] == ASCII.backslash {
+                index += 1
+                guard index < length else { return }
+                let esc = chars[index]
+                index += 1
+                if (esc == ASCII.upperC || esc == ASCII.upperM), index < length, chars[index] == ASCII.minus {
+                    index += 1
+                    if index < length && chars[index] == ASCII.backslash {
+                        continue
+                    }
+                    consumeSingleCharOrSurrogatePair()
+                    return
+                }
+                if esc == ASCII.lowerC {
+                    if index < length && chars[index] == ASCII.backslash {
+                        continue
+                    }
+                    consumeSingleCharOrSurrogatePair()
+                    return
+                }
+                if esc == ASCII.lowerX {
+                    consumeDigits(maxCount: 2, matching: isHexDigit)
+                    return
+                }
+                if esc == ASCII.lowerU {
+                    if index < length && chars[index] == ASCII.lBrace {
+                        while index < length && chars[index] != ASCII.rBrace && !isNewline(chars[index]) { index += 1 }
+                        if index < length && chars[index] == ASCII.rBrace { index += 1 }
+                    } else {
+                        consumeDigits(maxCount: 4, matching: isHexDigit)
+                    }
+                    return
+                }
+                if esc >= ASCII.zero && esc <= ASCII.seven {
+                    consumeDigits(maxCount: 2) { $0 >= ASCII.zero && $0 <= ASCII.seven }
+                    return
+                }
+                if index < length && UTF16.isLeadSurrogate(esc) && UTF16.isTrailSurrogate(chars[index]) {
+                    index += 1
+                }
+                return
+            }
+        }
+
+        private mutating func consumeSingleCharOrSurrogatePair() {
+            guard index < length else { return }
+            let first = chars[index]
+            index += 1
+            if index < length && UTF16.isLeadSurrogate(first) && UTF16.isTrailSurrogate(chars[index]) {
+                index += 1
+            }
+        }
+
+        private mutating func consumeDigits(maxCount: Int, matching predicate: (unichar) -> Bool) {
+            var count = 0
+            while count < maxCount && index < length && predicate(chars[index]) {
+                index += 1
+                count += 1
+            }
         }
 
         private mutating func scanNumber() {
@@ -847,19 +941,30 @@ private nonisolated extension RubyTokenizer {
                 return
             }
 
+            let memberAccess = isPrecededByMemberAccess(before: start)
+
             if matchesExact(Self.defKeyword, in: start..<index) {
-                emit(.keyword, start..<index)
-                scanMethodDeclarationName()
-                canStartRegex = true
+                if !memberAccess {
+                    emit(.keyword, start..<index)
+                    scanMethodDeclarationName()
+                    canStartRegex = true
+                } else {
+                    if isFollowedByOpenParen(from: index) {
+                        emit(.function, start..<index)
+                    }
+                    canStartRegex = false
+                }
                 return
             }
 
-            let word = String(decoding: chars[start..<index], as: UTF16.self)
+            if !memberAccess {
+                let word = String(decoding: chars[start..<index], as: UTF16.self)
 
-            if Self.keywords.contains(word) {
-                emit(.keyword, start..<index)
-                canStartRegex = Self.regexStarterKeywords.contains(word)
-                return
+                if Self.keywords.contains(word) {
+                    emit(.keyword, start..<index)
+                    canStartRegex = Self.regexStarterKeywords.contains(word)
+                    return
+                }
             }
 
             if isUppercaseASCII(chars[start]) {
@@ -879,18 +984,64 @@ private nonisolated extension RubyTokenizer {
             while index < length && (chars[index] == ASCII.space || chars[index] == ASCII.tab) { index += 1 }
             guard index < length else { return }
 
-            // Optional receiver prefix: `def self.foo` or `def Foo.bar` or `def obj.baz`
-            if isIdentStart(chars[index]) {
-                let firstStart = index
-                var firstEnd = index + 1
-                while firstEnd < length && isIdentContinue(chars[firstEnd]) { firstEnd += 1 }
-                if firstEnd < length && chars[firstEnd] == ASCII.dot {
-                    if matchesExact(Self.selfKeyword, in: firstStart..<firstEnd) {
-                        emit(.keyword, firstStart..<firstEnd)
-                    } else if isUppercaseASCII(chars[firstStart]) {
-                        emit(.type, firstStart..<firstEnd)
+            // Measure an identifier / `::`-scoped chain (e.g. `self.foo`, `Foo::Bar.baz`, `Foo::bar`, `obj.baz`).
+            var scan = index
+            if scan + 1 < length, chars[scan] == ASCII.colon, chars[scan + 1] == ASCII.colon {
+                scan += 2
+            }
+            var segmentCount = 0
+            var lastSegmentEnd = index
+            if scan < length, isIdentStart(chars[scan]) {
+                while true {
+                    scan += 1
+                    while scan < length && isIdentContinue(chars[scan]) { scan += 1 }
+                    segmentCount += 1
+                    lastSegmentEnd = scan
+                    if scan + 1 < length, chars[scan] == ASCII.colon, chars[scan + 1] == ASCII.colon,
+                       scan + 2 < length, isIdentStart(chars[scan + 2]) {
+                        scan += 2
+                        continue
                     }
-                    index = firstEnd + 1
+                    break
+                }
+            }
+
+            let hasTrailingDot = segmentCount > 0 && lastSegmentEnd < length && chars[lastSegmentEnd] == ASCII.dot
+            if hasTrailingDot || segmentCount > 1 {
+                // Emit receiver segments before the method name (`Foo::Bar` in `Foo::Bar.baz`, or `Foo` in `Foo::bar`).
+                if index + 1 < length, chars[index] == ASCII.colon, chars[index + 1] == ASCII.colon {
+                    index += 2
+                }
+                var remaining = segmentCount
+                while index < lastSegmentEnd {
+                    let segStart = index
+                    index += 1
+                    while index < length && isIdentContinue(chars[index]) { index += 1 }
+                    let segEnd = index
+                    remaining -= 1
+
+                    let isMethodSegment = !hasTrailingDot && remaining == 0
+                    if isMethodSegment {
+                        if index < length && (chars[index] == ASCII.question || chars[index] == ASCII.bang || chars[index] == ASCII.equals)
+                            && !isFollowedByEquals(index) {
+                            index += 1
+                        }
+                        emit(.function, segStart..<index)
+                        return
+                    }
+
+                    if matchesExact(Self.selfKeyword, in: segStart..<segEnd) {
+                        emit(.keyword, segStart..<segEnd)
+                    } else if isUppercaseASCII(chars[segStart]) {
+                        emit(.type, segStart..<segEnd)
+                    }
+
+                    if index + 1 < length && chars[index] == ASCII.colon && chars[index + 1] == ASCII.colon {
+                        index += 2
+                    }
+                }
+                if index < length && chars[index] == ASCII.dot {
+                    index += 1
                 }
             }
 
@@ -938,6 +1089,24 @@ private nonisolated extension RubyTokenizer {
         }
 
         // MARK: Helpers
+
+        private mutating func drainPendingHeredocs() {
+            guard !pendingHeredocs.isEmpty else { return }
+            for heredoc in pendingHeredocs.reversed() {
+                contextStack.append(.heredoc(heredoc))
+            }
+            pendingHeredocs.removeAll(keepingCapacity: true)
+        }
+
+        private func isPrecededByMemberAccess(before pos: Int) -> Bool {
+            var p = pos - 1
+            while p >= 0 && (chars[p] == ASCII.space || chars[p] == ASCII.tab) { p -= 1 }
+            guard p >= 0 else { return false }
+            if chars[p] == ASCII.dot {
+                return p == 0 || chars[p - 1] != ASCII.dot
+            }
+            return p >= 1 && chars[p] == ASCII.colon && chars[p - 1] == ASCII.colon
+        }
 
         private mutating func emit(_ kind: TokenKind, _ range: Range<Int>) {
             guard range.lowerBound < range.upperBound else { return }
@@ -1065,11 +1234,14 @@ private nonisolated extension RubyTokenizer {
             isDigit(c) || c == ASCII.underscore
         }
 
-        private func isHexOrUnderscore(_ c: unichar) -> Bool {
+        private func isHexDigit(_ c: unichar) -> Bool {
             isDigit(c)
                 || (c >= ASCII.lowerA && c <= ASCII.lowerF)
                 || (c >= ASCII.upperA && c <= ASCII.upperF)
-                || c == ASCII.underscore
+        }
+
+        private func isHexOrUnderscore(_ c: unichar) -> Bool {
+            isHexDigit(c) || c == ASCII.underscore
         }
 
         private func isUppercaseASCII(_ c: unichar) -> Bool {
@@ -1134,6 +1306,11 @@ private nonisolated extension RubyTokenizer {
             "and", "begin", "break", "case", "defined?", "do", "else", "elsif",
             "ensure", "if", "in", "next", "not", "or", "puts", "raise", "fail",
             "rescue", "return", "then", "unless", "until", "when", "while", "yield",
+        ]
+
+        private static let postRegexKeywords: Set<String> = [
+            "and", "or", "if", "unless", "while", "until", "do", "then",
+            "else", "elsif", "when", "end", "rescue", "ensure", "in",
         ]
     }
 }
