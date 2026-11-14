@@ -178,7 +178,7 @@ nonisolated enum SyntaxLanguage: String, Sendable, CaseIterable {
         case .javascript, .typescript: Grammars.javaScript
         case .json: Grammars.json
         case .python: Grammars.python
-        case .ruby: Grammars.ruby
+        case .ruby: RubyTokenizer.shared
         case .go: Grammars.go
         case .rust: Grammars.rust
         case .c, .cpp, .objectiveC: Grammars.cFamily
@@ -312,28 +312,6 @@ private nonisolated enum Grammars {
             SyntaxPattern(.string, ##"(?:[rRbBuUfF]{1,2})?'''[\s\S]*?(?:'''|\z)"##),
             SyntaxPattern(.string, ##"(?:[rRbBuUfF]{1,2})?"(?:\\.|[^"\\\n])*""##),
             SyntaxPattern(.string, ##"(?:[rRbBuUfF]{1,2})?'(?:\\.|[^'\\\n])*'"##),
-        ]
-    )
-
-    static let ruby = SyntaxGrammar(
-        rules: [
-            SyntaxPattern(.type, P.capitalized),
-            SyntaxPattern(.function, P.declared(after: "def"), group: 1),
-            SyntaxPattern(.number, P.number),
-            SyntaxPattern(.attribute, ##"(?<![:\w]):[A-Za-z_]\w*[?!]?"##),
-            SyntaxPattern(.variable, ##"@{1,2}\w+|\$\w+"##),
-            SyntaxPattern(.keyword, P.words("""
-                alias and begin break case class def do else elsif end ensure false for if in module next nil \
-                not or redo rescue retry return self super then true undef unless until when while yield \
-                require require_relative attr_accessor attr_reader attr_writer private protected public lambda \
-                proc puts raise
-                """)),
-        ],
-        spans: [
-            SyntaxPattern(.comment, ##"^=begin[\s\S]*?(?:^=end|\z)"##),
-            SyntaxPattern(.comment, P.hashComment),
-            SyntaxPattern(.string, P.doubleString),
-            SyntaxPattern(.string, P.singleString),
         ]
     )
 
