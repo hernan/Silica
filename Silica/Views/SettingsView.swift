@@ -126,6 +126,8 @@ private struct GeneralSettingsPane: View {
                 Toggle("Keep parent folders in view while scrolling the file tree", isOn: $settings.pinsParentFolders)
             }
 
+            CommandLineSettingsSection()
+
             Section("Updates") {
                 Toggle("Check for updates automatically", isOn: $updater.automaticallyChecksForUpdates)
                 LabeledContent("Version \(AppInfo.version) (\(AppInfo.build))") {
@@ -134,6 +136,94 @@ private struct GeneralSettingsPane: View {
                 }
             }
         }
+    }
+}
+
+private struct CommandLineSettingsSection: View {
+    private let installer = CLICommandInstaller.standard
+    @State private var status = CLICommandInstaller.standard.status
+    @State private var isOnPath = true
+    @State private var error: Error?
+
+    var body: some View {
+        Section("Command Line") {
+            LabeledContent {
+                button
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("‘silica’ command")
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(subtitleIsWarning ? Color.orange : Color.secondary)
+                }
+            }
+        }
+        .task { await refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await refresh() }
+        }
+        .alert("Couldn’t Update the ‘silica’ Command", isPresented: hasError, presenting: error) { _ in
+            Button("OK") {}
+        } message: { error in
+            Text(error.localizedDescription)
+        }
+    }
+
+    private var subtitle: String {
+        switch status {
+        case .installed where !isOnPath:
+            "Installed, but ~/.local/bin isn’t in your shell’s PATH. Add it to your shell profile."
+        case .installed:
+            "Installed in ~/.local/bin/silica"
+        case .installedElsewhere:
+            "Linked to a different copy of Silica"
+        case .conflict:
+            "A file that isn’t a link already exists at ~/.local/bin/silica"
+        case .notInstalled:
+            "Open projects and files from the terminal"
+        }
+    }
+
+    private var subtitleIsWarning: Bool {
+        switch status {
+        case .installed: !isOnPath
+        case .installedElsewhere, .conflict: true
+        case .notInstalled: false
+        }
+    }
+
+    @ViewBuilder
+    private var button: some View {
+        switch status {
+        case .installed:
+            Button("Uninstall") { perform(installer.uninstall) }
+        case .installedElsewhere:
+            Button("Repair") { perform(installer.install) }
+        case .conflict:
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([installer.destinationURL])
+            }
+        case .notInstalled:
+            Button("Install") { perform(installer.install) }
+        }
+    }
+
+    private var hasError: Binding<Bool> {
+        Binding { error != nil } set: { if !$0 { error = nil } }
+    }
+
+    private func perform(_ action: () throws -> Void) {
+        do {
+            try action()
+        } catch {
+            self.error = error
+        }
+        Task { await refresh() }
+    }
+
+    private func refresh() async {
+        status = installer.status
+        isOnPath = await installer.isOnShellPath()
     }
 }
 

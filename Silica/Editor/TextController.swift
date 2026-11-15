@@ -168,6 +168,7 @@ final class TextController: NSObject, NSTextViewDelegate {
 
     // MARK: Restoring position
 
+    private var pendingGoToLine: Int?
     /// A top line to scroll to once the view is on screen (from a restored session).
     private var pendingTopLine: Int?
     /// The top line when the view last left the screen (another tab was shown).
@@ -185,6 +186,12 @@ final class TextController: NSObject, NSTextViewDelegate {
 
     /// Called when the editor appears in the card.
     func didAppear() {
+        if let line = pendingGoToLine {
+            pendingGoToLine = nil
+            pendingTopLine = nil
+            jump(toLine: line)
+            return
+        }
         guard let line = pendingTopLine else { return }
         pendingTopLine = nil
         scroll(toLine: line)
@@ -197,6 +204,7 @@ final class TextController: NSObject, NSTextViewDelegate {
 
     /// The top line to save, whether or not the editor is on screen.
     var savedTopLine: Int {
+        if let pendingGoToLine { return pendingGoToLine }
         if let pendingTopLine { return pendingTopLine }
         if scrollView.window == nil { return lastTopLine ?? 1 }
         return topVisibleLine()
@@ -210,6 +218,16 @@ final class TextController: NSObject, NSTextViewDelegate {
 
     /// Moves the cursor to the start of the 1-based `line`.
     func goToLine(_ line: Int) {
+        pendingTopLine = nil
+        if scrollView.window == nil {
+            pendingGoToLine = line
+            return
+        }
+        pendingGoToLine = nil
+        jump(toLine: line)
+    }
+
+    private func jump(toLine line: Int) {
         guard let lineNumbers else { return }
         textView.placeCursor(at: lineNumbers.offset(ofLine: line))
         focus()
@@ -217,6 +235,8 @@ final class TextController: NSObject, NSTextViewDelegate {
 
     /// Selects `range` (a search match) and scrolls to it.
     func reveal(_ range: NSRange) {
+        pendingTopLine = nil
+        pendingGoToLine = nil
         textView.reveal(range)
         focus()
     }

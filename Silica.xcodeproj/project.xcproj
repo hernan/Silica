@@ -29,12 +29,15 @@
     },
   ],
   "files": [
+    { "kind": "folder", "path": "CLI", "target-membership": [ "silica-cli" ] },
+    { "kind": "folder", "path": "Shared", "target-membership": [ "Silica", "silica-cli" ] },
     { "kind": "folder", "path": "Silica", "target-membership": [ "Silica" ] },
     {
       "kind": "group",
       "name": "Products",
       "children": [
         { "path": "<PRODUCTS>/Silica.app", "id": "000000000000000000000120", "type": "wrapper.application", "index": false },
+        { "path": "<PRODUCTS>/silica", "id": "000000000000000000000121", "type": "compiled.mach-o.executable", "index": false },
       ],
     },
   ],
@@ -44,10 +47,31 @@
       "id": "000000000000000100000000",
       "product": "Products/Silica.app",
       "product-type": "application",
+      "dependencies": [
+        "silica-cli",
+      ],
       "build-phases": [
         "compile-sources",
         "frameworks",
         "resources",
+        {
+          "kind": "script",
+          "name": "Embed and Sign CLI Helper",
+          "input-paths": [
+            "$(BUILT_PRODUCTS_DIR)/silica",
+          ],
+          "output-paths": [
+            "$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/silica",
+          ],
+          "shell": "/bin/sh",
+          "script": [
+            "set -e",
+            "mkdir -p \"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers\"",
+            "cp -f \"${BUILT_PRODUCTS_DIR}/silica\" \"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers/silica\"",
+            "/usr/bin/codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" --options runtime --timestamp=none \"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers/silica\"",
+            "",
+          ],
+        },
       ],
       "package-product-members": [
         {
@@ -72,6 +96,7 @@
         "ENABLE_APP_SANDBOX": "NO",
         "ENABLE_HARDENED_RUNTIME": "YES",
         "ENABLE_PREVIEWS": "YES",
+        "ENABLE_USER_SCRIPT_SANDBOXING": "NO",
         "GENERATE_INFOPLIST_FILE": "YES",
         "INFOPLIST_FILE": "Config/Info.plist",
         "INFOPLIST_KEY_LSApplicationCategoryType": "public.app-category.developer-tools",
@@ -100,6 +125,26 @@
         "SWIFT_DEFAULT_ACTOR_ISOLATION": "MainActor",
         "SWIFT_EMIT_LOC_STRINGS": "YES",
         "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
+        "SWIFT_VERSION": "5.0",
+      },
+    }, {
+      "name": "silica-cli",
+      "id": "000000000000000100000001",
+      "product": "Products/silica",
+      "product-type": "tool",
+      "build-phases": [
+        "compile-sources",
+        "frameworks",
+      ],
+      "build-settings": {
+        "CODE_SIGN_STYLE": "Automatic",
+        "DEVELOPMENT_TEAM": "BH46VD9229",
+        "ENABLE_HARDENED_RUNTIME": "YES",
+        "PRODUCT_NAME": "silica",
+        "SDKROOT": "auto",
+        "SKIP_INSTALL": "YES",
+        "SUPPORTED_PLATFORMS": "macosx",
+        "SWIFT_APPROACHABLE_CONCURRENCY": "YES",
         "SWIFT_VERSION": "5.0",
       },
     },

@@ -247,7 +247,7 @@ final class WorkspaceModel {
         terminal.onOpenFile = { [weak self] url, line in
             self?.open(url)
             self?.reveal(url)
-            if let line { self?.goToLine(line) }
+            if let line { self?.goToLine(line, in: url) }
         }
         terminals.append(terminal)
         self.terminal = terminal
@@ -282,7 +282,7 @@ final class WorkspaceModel {
     func openSearchMatch(_ url: URL, range: NSRange) {
         open(url)
         guard let buffer = buffers[url] else { return }
-        if buffer.isShowingPreview { buffer.setShowingPreview(false) }
+        if buffer.isShowingPreview { buffer.exitPreviewForNavigation() }
         // Once the editor for the file is in the window.
         DispatchQueue.main.async {
             buffer.textController?.reveal(range)
@@ -322,10 +322,17 @@ final class WorkspaceModel {
         goToLine(line)
     }
 
+    func goToLine(_ line: Int, in url: URL) {
+        guard let buffer = buffers[url], let controller = buffer.textController else { return }
+        if buffer.isShowingPreview {
+            buffer.exitPreviewForNavigation()
+        }
+        controller.goToLine(line)
+    }
+
     private func goToLine(_ line: Int) {
-        guard let buffer = activeBuffer, let controller = buffer.textController else { return }
-        if buffer.isShowingPreview { buffer.setShowingPreview(false) }
-        DispatchQueue.main.async { controller.goToLine(line) }
+        guard let activeTab else { return }
+        goToLine(line, in: activeTab)
     }
 
     func hideQuickOpen() {
@@ -342,7 +349,7 @@ final class WorkspaceModel {
         hideQuickOpen()
         open(url)
         reveal(url)
-        if let line { goToLine(line) }
+        if let line { goToLine(line, in: url) }
     }
 
     /// Expands the folders above `url` so its row exists, selects it and asks the
@@ -818,10 +825,8 @@ final class WorkspaceModel {
         isSidebarVisible = session.isSidebarVisible
         for tab in session.tabs {
             let url = sessionURL(for: tab.path)
-            var isDirectory: ObjCBool = false
             guard !openTabs.contains(url),
-                  FileManager.default.fileExists(atPath: url.path(percentEncoded: false), isDirectory: &isDirectory),
-                  !isDirectory.boolValue else { continue }
+                  SafeFileAccess.isRegularFile(at: url) else { continue }
             let buffer = makeBuffer(for: url)
             buffers[url] = buffer
             openTabs.append(url)

@@ -226,6 +226,12 @@ final class EditorBuffer: Identifiable {
         isUntitled = false
         previewFormat = PreviewFormat(url: url)
 
+        guard SafeFileAccess.isRegularFile(at: url) else {
+            encoding = .utf8
+            content = .unreadable("“\(url.lastPathComponent)” is not a regular file.")
+            return
+        }
+
         // From the file system, not URL's resource cache, which can be stale when a
         // changed file is opened again.
         let attributes = Self.attributes(of: url)
@@ -255,18 +261,17 @@ final class EditorBuffer: Identifiable {
             return
         }
 
-        if size > Self.maxFileSize {
-            content = .tooLarge(size)
+        let data: Data
+        switch SafeFileAccess.readRegularFile(at: url, maxBytes: Int(Self.maxFileSize)) {
+        case .data(let readData):
+            data = readData
+        case .tooLarge(let byteCount):
+            content = .tooLarge(byteCount)
             encoding = .utf8
             diskSnapshot = attributes.map { DiskSnapshot(attributes: $0, digest: nil) }
             return
-        }
-
-        let data: Data
-        do {
-            data = try Data(contentsOf: url)
-        } catch {
-            content = .unreadable(error.localizedDescription)
+        case .unreadable(let message):
+            content = .unreadable(message)
             encoding = .utf8
             return
         }
@@ -371,9 +376,20 @@ final class EditorBuffer: Identifiable {
             preview?.unloadPage()
         } else {
             preview?.topVisibleLine { [weak self] line in
-                self?.isShowingPreview = false
+                guard let self, self.isShowingPreview else { return }
+                self.isShowingPreview = false
                 DispatchQueue.main.async { controller.scroll(toLine: line) }
             }
+        }
+    }
+
+    /// Exits preview immediately without restoring the preview's scroll position,
+    /// so an explicit line or search navigation is not overwritten.
+    func exitPreviewForNavigation() {
+        guard isShowingPreview else { return }
+        isShowingPreview = false
+        if previewFormat == .html {
+            preview?.unloadPage()
         }
     }
 
@@ -423,12 +439,18 @@ final class EditorBuffer: Identifiable {
         if snapshot.matches(attributes) { return .unchanged }
         // Images and other files that aren't kept as text are compared by date and size only.
         guard snapshot.digest != nil else { return .modified(nil) }
-        guard let data = try? Data(contentsOf: url) else { return .deleted }
-        if Self.digest(of: data) == snapshot.digest {
-            diskSnapshot = DiskSnapshot(attributes: attributes, digest: snapshot.digest)
-            return .unchanged
+        switch SafeFileAccess.readRegularFile(at: url, maxBytes: Int(Self.maxFileSize)) {
+        case .data(let data):
+            if Self.digest(of: data) == snapshot.digest {
+                diskSnapshot = DiskSnapshot(attributes: attributes, digest: snapshot.digest)
+                return .unchanged
+            }
+            return .modified(data)
+        case .tooLarge:
+            return .modified(nil)
+        case .unreadable:
+            return Self.attributes(of: url) != nil ? .modified(nil) : .deleted
         }
-        return .modified(data)
     }
 
     /// Notes whether the file still exists and, for unedited text, takes in changes
@@ -455,7 +477,7 @@ final class EditorBuffer: Identifiable {
     /// Replaces the text with the file on disk, discarding unsaved edits. It's one
     /// undoable change, so ⌘Z brings the edits back.
     func revertToDisk() {
-        guard let data = try? Data(contentsOf: url) else { return }
+        guard let data = SafeFileAccess.readData(at: url, maxBytes: Int(Self.maxFileSize)) else { return }
         revert(to: data)
     }
 
@@ -561,9 +583,7 @@ final class EditorBuffer: Identifiable {
         // ".ts" and ".mts" name MPEG transport streams to the system, but are far more
         // often TypeScript: those count as video only if they don't read as text.
         if type.conforms(to: .mpeg2TransportStream) || url.pathExtension.lowercased() == "mts" {
-            guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
-            defer { try? handle.close() }
-            guard let head = try? handle.read(upToCount: 8192) else { return false }
+            guard let head = SafeFileAccess.readPrefix(at: url, maxBytes: 8192) else { return false }
             return looksBinary(head)
         }
         return true

@@ -18,6 +18,8 @@ nonisolated struct GitIgnoreFile: @unchecked Sendable {
 
     var isEmpty: Bool { rules.isEmpty }
 
+    private static let maxIgnoreFileSize = 1 * 1024 * 1024
+
     init(base: String, contents: String) {
         self.base = base
         self.rules = contents
@@ -26,7 +28,7 @@ nonisolated struct GitIgnoreFile: @unchecked Sendable {
     }
 
     init?(base: String, url: URL) {
-        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard let data = SafeFileAccess.readData(at: url, maxBytes: Self.maxIgnoreFileSize) else { return nil }
         self.init(base: base, contents: String(decoding: data, as: UTF8.self))
     }
 

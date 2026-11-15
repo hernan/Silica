@@ -43,7 +43,11 @@ struct WorkspaceWindow: View {
             if let workspace, KeyWorkspace.shared.current === workspace {
                 KeyWorkspace.shared.current = nil
             }
-            if let workspace { ExternalOpener.shared.workspaceDidClose(workspace) }
+            if let workspace {
+                ExternalOpener.shared.workspaceDidClose(workspace)
+            } else if let projectID {
+                ExternalOpener.shared.workspaceDidFailToOpen(projectID: projectID)
+            }
             workspace?.close()
             Self.openCount -= 1
             if Self.openCount == 0 {
@@ -65,6 +69,7 @@ struct WorkspaceWindow: View {
             self.workspace = workspace
             ExternalOpener.shared.workspaceDidOpen(workspace, projectID: projectID)
         } catch {
+            ExternalOpener.shared.workspaceDidFailToOpen(projectID: projectID)
             errorMessage = error.localizedDescription
         }
     }

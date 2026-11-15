@@ -127,19 +127,3 @@ final class RecentProjectsStore {
         UserDefaults.standard.set(data, forKey: defaultsKey)
     }
 }
-
-enum RealHome {
-    /// The user's home directory (not the sandbox container).
-    static let path: String = {
-        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
-            return String(cString: dir)
-        }
-        return NSHomeDirectory()
-    }()
-}
-
-nonisolated extension String {
-    var trimmingTrailingSlash: String {
-        count > 1 && hasSuffix("/") ? String(dropLast()) : self
-    }
-}
